@@ -526,16 +526,6 @@ flake8 .
 black .
 mypy .
 ```
-
-## 📞 Support & Community
-
-### Getting Help
-
-1. **📖 Documentation**: Check our comprehensive documentation suite
-2. **🐛 Issues**: Report bugs on [GitHub Issues](https://github.com/your-username/vr-emotion-adaptation/issues)
-3. **💬 Discussions**: Join conversations on [GitHub Discussions](https://github.com/your-username/vr-emotion-adaptation/discussions)
-4. **📧 Email**: Contact the maintainers at [email@example.com]
-
 ### Troubleshooting Resources
 
 - **System Diagnostics**: Run `python diagnostic_test.py`
@@ -580,24 +570,6 @@ mypy .
 - Special thanks to all contributors who have helped improve this project
 - Beta testers who provided valuable feedback and bug reports
 - Researchers who shared datasets and methodologies
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-### Citation
-
-If you use this system in your research or commercial projects, please cite:
-
-```bibtex
-@software{vr_emotion_adaptation_2024,
-  title={VR Emotion Adaptation System: Real-time Emotion-Driven Environmental Adaptation},
-  author={[Your Name]},
-  year={2024},
-  url={https://github.com/your-username/vr-emotion-adaptation},
-  version={1.0.0}
-}
-```
 
 ## 🚀 Quick Start Summary
 
