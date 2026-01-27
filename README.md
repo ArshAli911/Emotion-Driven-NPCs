@@ -35,7 +35,7 @@ A sophisticated real-time emotion-driven environmental adaptation system for Vir
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ArshAli911/Env.-Adapt.-via-Emotions-through-facial-features-and-audio-Detection-Change-in-npc-dialogues-
 cd Conference
 ```
 
