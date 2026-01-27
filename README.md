@@ -457,23 +457,6 @@ This enables:
 4. Add tests if applicable
 5. Submit a pull request
 
-## License
-
-[Add your license information here]
-
-## Citation
-
-If you use this system in your research, please cite:
-
-```bibtex
-@article{vr_emotion_adaptation_2024,
-  title={Emotion-Driven Environmental Adaptation in VR Worlds: A Multi-Modal Approach},
-  author={[Your Name]},
-  journal={[Conference/Journal Name]},
-  year={2024}
-}
-```
-
 ## Acknowledgments
 
 - FER2013 dataset for facial emotion recognition
