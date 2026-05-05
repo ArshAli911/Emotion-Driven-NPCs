@@ -68,6 +68,26 @@ def _initialize_session_state():
         st.session_state.last_emotion = 'N/A'
         st.session_state.last_confidence = 'N/A'
         st.session_state.last_dialogue = 'Waiting for emotion detection...'
+        st.session_state.performance_metrics = {
+            'fps': 0.0,
+            'processing_latency_ms': 0.0,
+            'facial_latency_ms': 0.0,
+            'audio_latency_ms': 0.0,
+            'fusion_latency_ms': 0.0,
+            'dialogue_latency_ms': 0.0,
+            'runtime_seconds': 0.0,
+            'queue_size': 0,
+            'device': 'unknown',
+            'cuda_memory_mb': 0.0,
+            'video_active': False,
+            'audio_active': False
+        }
+        st.session_state.model_breakdown = {}
+        st.session_state.contribution_weights = {
+            'video': 0.0,
+            'audio': 0.0,
+            'basis': 'waiting for live data'
+        }
         
         # Hardware status
         st.session_state.webcam_status = "Unknown (start to check)"
@@ -79,6 +99,30 @@ def _initialize_session_state():
         st.session_state.stop_event = threading.Event()
         
         logger.debug("Session state initialized")
+
+    if 'performance_metrics' not in st.session_state:
+        st.session_state.performance_metrics = {
+            'fps': 0.0,
+            'processing_latency_ms': 0.0,
+            'facial_latency_ms': 0.0,
+            'audio_latency_ms': 0.0,
+            'fusion_latency_ms': 0.0,
+            'dialogue_latency_ms': 0.0,
+            'runtime_seconds': 0.0,
+            'queue_size': 0,
+            'device': 'unknown',
+            'cuda_memory_mb': 0.0,
+            'video_active': False,
+            'audio_active': False
+        }
+    if 'model_breakdown' not in st.session_state:
+        st.session_state.model_breakdown = {}
+    if 'contribution_weights' not in st.session_state:
+        st.session_state.contribution_weights = {
+            'video': 0.0,
+            'audio': 0.0,
+            'basis': 'waiting for live data'
+        }
 
 def _ensure_logs_directory():
     """Ensure logs directory exists before logging."""
@@ -117,6 +161,157 @@ def _render_main_display():
     dialogue_display.info(f"💬 {current_dialogue}")
     
     return emotion_display, confidence_display, dialogue_display
+
+def _format_duration(seconds):
+    seconds = int(max(seconds or 0, 0))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {sec}s"
+    if minutes:
+        return f"{minutes}m {sec}s"
+    return f"{sec}s"
+
+def _draw_performance_metrics(placeholders, metrics):
+    placeholders['fps'].metric("FPS", f"{metrics.get('fps', 0.0):.1f}")
+    placeholders['latency'].metric("Latency", f"{metrics.get('processing_latency_ms', 0.0):.0f} ms")
+    placeholders['frames'].metric("Frames", st.session_state.get('frame_count', 0))
+    placeholders['runtime'].metric("Runtime", _format_duration(metrics.get('runtime_seconds', 0.0)))
+
+    placeholders['facial'].metric("Face", f"{metrics.get('facial_latency_ms', 0.0):.0f} ms")
+    placeholders['audio'].metric("Audio", f"{metrics.get('audio_latency_ms', 0.0):.0f} ms")
+    placeholders['fusion'].metric("Fusion", f"{metrics.get('fusion_latency_ms', 0.0):.0f} ms")
+    placeholders['dialogue'].metric("Dialogue", f"{metrics.get('dialogue_latency_ms', 0.0):.0f} ms")
+
+    video_status = "On" if metrics.get('video_active') else "Off"
+    audio_status = "On" if metrics.get('audio_active') else "Off"
+    placeholders['details'].caption(
+        f"Input: video {video_status}, audio {audio_status} | "
+        f"Queue: {metrics.get('queue_size', 0)} | "
+        f"Device: {metrics.get('device', 'unknown')} | "
+        f"CUDA memory: {metrics.get('cuda_memory_mb', 0.0):.1f} MB"
+    )
+
+def _render_performance_metrics():
+    st.subheader("Live Performance Metrics")
+    top_cols = st.columns(4)
+    detail_cols = st.columns(4)
+    placeholders = {
+        'fps': top_cols[0].empty(),
+        'latency': top_cols[1].empty(),
+        'frames': top_cols[2].empty(),
+        'runtime': top_cols[3].empty(),
+        'facial': detail_cols[0].empty(),
+        'audio': detail_cols[1].empty(),
+        'fusion': detail_cols[2].empty(),
+        'dialogue': detail_cols[3].empty(),
+        'details': st.empty()
+    }
+    _draw_performance_metrics(placeholders, st.session_state.get('performance_metrics', {}))
+    return placeholders
+
+def _build_pipeline_dot(metrics, breakdown):
+    video_active = metrics.get('video_active')
+    audio_active = metrics.get('audio_active')
+    fusion_active = (breakdown.get('fusion') or {}).get('active')
+    decision = breakdown.get('decision') or {}
+    decision_label = decision.get('emotion', 'waiting')
+
+    def node_style(active):
+        return 'style="filled", fillcolor="#d9ead3"' if active else 'style="filled", fillcolor="#f4cccc"'
+
+    return f'''
+digraph {{
+  rankdir=LR;
+  graph [pad="0.2", nodesep="0.35", ranksep="0.45"];
+  node [shape=box, fontname="Arial", fontsize=10, margin="0.08,0.05"];
+  edge [fontname="Arial", fontsize=9];
+
+  user [label="User Input", style="filled", fillcolor="#cfe2f3"];
+  webcam [label="Webcam\\nVideo", {node_style(video_active)}];
+  mic [label="Microphone\\nAudio", {node_style(audio_active)}];
+  face [label="FacialEmotionCNN", {node_style(video_active)}];
+  audio [label="AudioEmotionLSTM", {node_style(audio_active)}];
+  fusion [label="Multimodal Fusion", {node_style(fusion_active)}];
+  decision [label="Decision\\n{decision_label}", style="filled", fillcolor="#fff2cc"];
+  npc [label="NPC Dialogue", style="filled", fillcolor="#eadcf8"];
+  env [label="VR Adaptation", style="filled", fillcolor="#eadcf8"];
+  ui [label="Frontend Metrics", style="filled", fillcolor="#d9d2e9"];
+
+  user -> webcam;
+  user -> mic;
+  webcam -> face;
+  mic -> audio;
+  face -> fusion;
+  audio -> fusion;
+  fusion -> decision;
+  decision -> npc;
+  decision -> env;
+  decision -> ui;
+}}
+'''
+
+def _draw_pipeline_visualization(placeholders, metrics, breakdown):
+    placeholders['graph'].graphviz_chart(_build_pipeline_dot(metrics, breakdown), use_container_width=True)
+
+def _draw_model_breakdown(placeholders, breakdown):
+    rows = []
+    for key in ('facial', 'audio', 'fusion'):
+        item = breakdown.get(key) or {}
+        rows.append({
+            'Stage': key.capitalize(),
+            'Model': item.get('model', 'Waiting'),
+            'Emotion': item.get('emotion', 'N/A'),
+            'Confidence': f"{item.get('confidence', 0.0):.2f}",
+            'Active': 'Yes' if item.get('active') else 'No'
+        })
+    decision = breakdown.get('decision') or {}
+    rows.append({
+        'Stage': 'Final',
+        'Model': 'Decision Layer',
+        'Emotion': decision.get('emotion', 'N/A'),
+        'Confidence': f"{decision.get('confidence', 0.0):.2f}",
+        'Active': 'Yes' if decision else 'No'
+    })
+    placeholders['table'].table(rows)
+
+def _draw_contribution_weights(placeholders, weights):
+    video_weight = max(0.0, min(float(weights.get('video', 0.0)), 1.0))
+    audio_weight = max(0.0, min(float(weights.get('audio', 0.0)), 1.0))
+
+    placeholders['video_label'].metric("Video Contribution", f"{video_weight * 100:.1f}%")
+    placeholders['video_bar'].progress(video_weight)
+    placeholders['audio_label'].metric("Audio Contribution", f"{audio_weight * 100:.1f}%")
+    placeholders['audio_bar'].progress(audio_weight)
+    placeholders['basis'].caption(f"Weight basis: {weights.get('basis', 'waiting for live data')}")
+
+def _render_live_pipeline_insights():
+    st.subheader("Pipeline Visualization")
+    graph_placeholder = st.empty()
+
+    st.subheader("Model Breakdown")
+    table_placeholder = st.empty()
+
+    st.subheader("Audio vs Video Contribution")
+    video_col, audio_col = st.columns(2)
+    placeholders = {
+        'graph': graph_placeholder,
+        'table': table_placeholder,
+        'video_label': video_col.empty(),
+        'video_bar': video_col.empty(),
+        'audio_label': audio_col.empty(),
+        'audio_bar': audio_col.empty(),
+        'basis': st.empty()
+    }
+
+    _draw_pipeline_visualization(
+        placeholders,
+        st.session_state.get('performance_metrics', {}),
+        st.session_state.get('model_breakdown', {})
+    )
+    _draw_model_breakdown(placeholders, st.session_state.get('model_breakdown', {}))
+    _draw_contribution_weights(placeholders, st.session_state.get('contribution_weights', {}))
+    return placeholders
 
 # --- UI Update Function --- #
 def update_ui(data, placeholders):
@@ -230,6 +425,8 @@ def run_streamlit_app():
 
     # --- Main Feature Display ---
     emotion_display, confidence_display, dialogue_display = _render_main_display()
+    performance_placeholders = _render_performance_metrics()
+    pipeline_placeholders = _render_live_pipeline_insights()
 
     # --- Controls ---
     st.sidebar.markdown("### Actions")
@@ -333,6 +530,34 @@ def run_streamlit_app():
                 # Update frame count
                 if 'frame_count' in data:
                     st.session_state['frame_count'] = data.get('frame_count', 0)
+
+                if 'performance' in data:
+                    st.session_state['performance_metrics'].update(data.get('performance') or {})
+                    _draw_performance_metrics(
+                        performance_placeholders,
+                        st.session_state['performance_metrics']
+                    )
+
+                if 'model_breakdown' in data:
+                    st.session_state['model_breakdown'] = data.get('model_breakdown') or {}
+                    _draw_model_breakdown(
+                        pipeline_placeholders,
+                        st.session_state['model_breakdown']
+                    )
+
+                if 'contribution_weights' in data:
+                    st.session_state['contribution_weights'] = data.get('contribution_weights') or {}
+                    _draw_contribution_weights(
+                        pipeline_placeholders,
+                        st.session_state['contribution_weights']
+                    )
+
+                if 'performance' in data or 'model_breakdown' in data:
+                    _draw_pipeline_visualization(
+                        pipeline_placeholders,
+                        st.session_state['performance_metrics'],
+                        st.session_state['model_breakdown']
+                    )
                     
             elif data.get('type') == 'error':
                 status_placeholder.error(data.get('message', 'Unknown error'))

@@ -82,6 +82,9 @@ class VREmotionAdaptation:
         self.combined_accuracies = []
         self.frame_count = 0
         self.accuracy_update_interval = 30  # Update accuracy every 30 frames
+        self.performance_fps_history = deque(maxlen=30)
+        self.runtime_started_at = None
+        self._last_frame_timestamp = None
     
     def _cleanup_audio_on_error(self):
         """Clean up audio resources when an error occurs during setup."""
@@ -262,8 +265,16 @@ class VREmotionAdaptation:
         self.last_emotion = None
         self.last_confidence = 0.0
         self.frame_count = 0
+        self.performance_fps_history.clear()
+        self.runtime_started_at = time.time()
+        self._last_frame_timestamp = time.perf_counter()
         
         while not stop_event.is_set():
+            loop_started_at = time.perf_counter()
+            facial_latency_ms = 0.0
+            audio_latency_ms = 0.0
+            fusion_latency_ms = 0.0
+            dialogue_latency_ms = 0.0
             facial_input_tensor = None  # Initialize to None at the start of each loop
             audio_mfcc_tensor = None    # Initialize to None at the start of each loop
             try:
@@ -280,7 +291,9 @@ class VREmotionAdaptation:
                     self._logger.debug(f"Webcam frame read: ret={ret}")
                     if ret and frame is not None:
                         try:
+                            facial_started_at = time.perf_counter()
                             facial_emotion_result, facial_input_tensor = self.process_facial_frame(frame)
+                            facial_latency_ms = (time.perf_counter() - facial_started_at) * 1000
                         except Exception as e:
                             self._logger.error(f"Facial processing error: {e}")
                             facial_input_tensor = None
@@ -303,7 +316,9 @@ class VREmotionAdaptation:
                 if self.audio_stream:
                     try:
                         audio_data = self.audio_stream.read(config.processing.audio_chunk_size, exception_on_overflow=False)
+                        audio_started_at = time.perf_counter()
                         audio_emotion_result, audio_mfcc_tensor = self.process_audio_chunk(audio_data)
+                        audio_latency_ms = (time.perf_counter() - audio_started_at) * 1000
                     except Exception as e:
                         print(f"Audio processing error: {e}")
                         audio_mfcc_tensor = None
@@ -315,11 +330,13 @@ class VREmotionAdaptation:
                 # Multimodal fusion (if both inputs are available)
                 if facial_input_tensor is not None and audio_mfcc_tensor is not None:
                     try:
+                        fusion_started_at = time.perf_counter()
                         # Flatten both tensors to [batch, -1] before concatenation
                         facial_flat = facial_input_tensor.view(facial_input_tensor.size(0), -1)
                         audio_flat = audio_mfcc_tensor.view(audio_mfcc_tensor.size(0), -1)
                         combined_input = torch.cat([facial_flat, audio_flat], dim=1)
                         combined_emotion_result = self.multimodal_classifier.predict(combined_input.to(self.device))
+                        fusion_latency_ms = (time.perf_counter() - fusion_started_at) * 1000
                     except Exception as e:
                         print(f"Multimodal fusion error: {e}")
                         # Fallback to averaging individual results
@@ -340,6 +357,27 @@ class VREmotionAdaptation:
                 dominant_emotion, dominant_confidence = self._determine_dominant_emotion(
                     facial_emotion_result, audio_emotion_result, combined_emotion_result
                 )
+                video_active_for_frame = facial_input_tensor is not None
+                audio_active_for_frame = audio_mfcc_tensor is not None
+                facial_confidence = float(facial_emotion_result.get('confidence', 0.0))
+                audio_confidence = float(audio_emotion_result.get('confidence', 0.0))
+                if video_active_for_frame and audio_active_for_frame:
+                    confidence_total = facial_confidence + audio_confidence
+                    if confidence_total > 0:
+                        video_weight = facial_confidence / confidence_total
+                        audio_weight = audio_confidence / confidence_total
+                    else:
+                        video_weight = 0.5
+                        audio_weight = 0.5
+                elif video_active_for_frame:
+                    video_weight = 1.0
+                    audio_weight = 0.0
+                elif audio_active_for_frame:
+                    video_weight = 0.0
+                    audio_weight = 1.0
+                else:
+                    video_weight = 0.0
+                    audio_weight = 0.0
                 
                 # Update environment controller
                 self.env_controller.update_emotion(dominant_emotion, dominant_confidence)
@@ -349,13 +387,28 @@ class VREmotionAdaptation:
                 current_time = time.time()
                 print(f"[DEBUG] Before _should_generate_dialogue call. Dominant Emotion: {dominant_emotion}, Confidence: {dominant_confidence:.2f}")
                 if self._should_generate_dialogue(dominant_emotion, dominant_confidence, current_time):
+                    dialogue_started_at = time.perf_counter()
                     dialogue = self.env_controller.generate_dialogue(dominant_emotion) # Placeholder for actual LLM call
+                    dialogue_latency_ms = (time.perf_counter() - dialogue_started_at) * 1000
                     self.last_dialogue_time = current_time
                     self.last_dialogue_emotion = dominant_emotion
                     print(f"[DEBUG] Generated dialogue: {dialogue}") # Debug print
                 
                 # Update frame count (fix double increment bug)
                 self.frame_count += 1
+                now_perf = time.perf_counter()
+                frame_interval = now_perf - self._last_frame_timestamp if self._last_frame_timestamp else 0
+                self._last_frame_timestamp = now_perf
+                if frame_interval > 0:
+                    self.performance_fps_history.append(1.0 / frame_interval)
+                average_fps = float(np.mean(self.performance_fps_history)) if self.performance_fps_history else 0.0
+                processing_latency_ms = (now_perf - loop_started_at) * 1000
+                runtime_seconds = time.time() - self.runtime_started_at if self.runtime_started_at else 0.0
+                cuda_memory_mb = (
+                    torch.cuda.memory_allocated(self.device) / (1024 * 1024)
+                    if self.device.type == 'cuda'
+                    else 0.0
+                )
                 
                 # Put processed data into the queue for Streamlit UI
                 try:
@@ -370,7 +423,50 @@ class VREmotionAdaptation:
                         'dominant_emotion': dominant_emotion,
                         'dominant_confidence': dominant_confidence,
                         'dialogue': dialogue,
-                        'frame_count': self.frame_count
+                        'frame_count': self.frame_count,
+                        'model_breakdown': {
+                            'facial': {
+                                'model': 'FacialEmotionCNN',
+                                'emotion': facial_emotion_result['emotion'],
+                                'confidence': facial_confidence,
+                                'active': video_active_for_frame
+                            },
+                            'audio': {
+                                'model': 'AudioEmotionLSTM',
+                                'emotion': audio_emotion_result['emotion'],
+                                'confidence': audio_confidence,
+                                'active': audio_active_for_frame
+                            },
+                            'fusion': {
+                                'model': 'MultiModalEmotionFusion',
+                                'emotion': combined_emotion_result['emotion'],
+                                'confidence': float(combined_emotion_result.get('confidence', 0.0)),
+                                'active': video_active_for_frame and audio_active_for_frame
+                            },
+                            'decision': {
+                                'emotion': dominant_emotion,
+                                'confidence': float(dominant_confidence)
+                            }
+                        },
+                        'contribution_weights': {
+                            'video': video_weight,
+                            'audio': audio_weight,
+                            'basis': 'normalized active input confidence'
+                        },
+                        'performance': {
+                            'fps': average_fps,
+                            'processing_latency_ms': processing_latency_ms,
+                            'facial_latency_ms': facial_latency_ms,
+                            'audio_latency_ms': audio_latency_ms,
+                            'fusion_latency_ms': fusion_latency_ms,
+                            'dialogue_latency_ms': dialogue_latency_ms,
+                            'runtime_seconds': runtime_seconds,
+                            'queue_size': data_queue.qsize(),
+                            'device': str(self.device),
+                            'cuda_memory_mb': cuda_memory_mb,
+                            'video_active': self.video_capture is not None,
+                            'audio_active': self.audio_stream is not None
+                        }
                     })
                     print(f"[DEBUG] Pushed update to queue: Emotion={dominant_emotion}, Frame={self.frame_count}, Dialogue='{dialogue[:30] if dialogue else 'None'}...'") # Debug print
                 except queue.Full:

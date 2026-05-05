@@ -31,6 +31,7 @@ ollama>=0.1.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 plotly>=5.15.0
+graphviz>=0.20.0
 
 # VR/AR Development
 pygame>=2.5.0
@@ -48,3 +49,4 @@ webrtcvad>=2.0.10
 
 # Web Application
 streamlit
+streamlit-autorefresh
