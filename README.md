@@ -4,6 +4,12 @@ Emotion-aware NPC and environment adaptation system for VR-style applications. T
 
 The system is built with Python, PyTorch, OpenCV, Librosa, Streamlit, and Ollama.
 
+### Problem Statement
+
+Traditional NPC systems often rely on fixed dialogue trees and static environment responses, which makes virtual characters feel disconnected from the player's current emotional state. This project addresses that limitation by building an emotion-aware interaction layer that detects user emotion from both facial expressions and speech signals, fuses those predictions into a stable emotion state, and uses the result to adapt NPC dialogue, behavior, lighting, and ambience in real time.
+
+The goal is to make VR-style interactions more responsive and immersive by allowing NPCs and surrounding environments to react to how the user appears to feel, rather than only responding to scripted input or predefined game events.
+
 ### Core Features
 
 - Facial emotion recognition using webcam frames and a CNN model.
