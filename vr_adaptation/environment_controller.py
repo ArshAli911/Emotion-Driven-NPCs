@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from models.ollama_integration import OllamaIntegration
+from models.fallback_dialogue import pick_fallback_line
 
 class EmotionType(Enum):
     """Enumeration of supported emotions"""
@@ -356,20 +357,17 @@ class EnvironmentController:
         return self.ollama_client.analyze_text_emotion(text)
 
     def generate_dialogue(self, emotion: str) -> str:
-        """Generate dialogue based on emotion using Ollama."""
+        """Generate dialogue based on emotion. Falls back to pre-written lines
+        when Ollama is unavailable; `generate_npc_dialogue` handles that internally."""
         context = f"The user is currently expressing {emotion} emotion. Respond with a supportive or appropriate short dialogue."
-        if not self.ollama_client.is_model_available():
-            return "Ollama model is not available for dialogue generation."
-
         try:
             dialogue = self.ollama_client.generate_npc_dialogue(emotion, context)
-            if dialogue is None:
-                return "I'm not sure how to respond right now."
-            return dialogue
+            if dialogue:
+                return dialogue
+            return pick_fallback_line(emotion)
         except Exception as e:
             print(f"Ollama dialogue generation failed: {e}")
-            print(11111)
-            return f"I'm here to support you. (Error: {str(e)[:50]}...)"
+            return pick_fallback_line(emotion)
 
     def generate_contextual_info_with_ollama(self, emotion: str) -> str:
         """Generates descriptive contextual information for the VR environment using Ollama."""

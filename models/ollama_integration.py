@@ -6,6 +6,8 @@ import logging
 import os
 from dataclasses import dataclass
 
+from models.fallback_dialogue import pick_fallback_line
+
 class OllamaIntegrationError(Exception):
     """Base exception for Ollama integration errors"""
     pass
@@ -330,16 +332,19 @@ Emotion:"""
         """
         logging.debug(f"[DEBUG] generate_npc_dialogue called with emotion='{emotion}', context='{context}', dialogue_type='{dialogue_type}', personality='{personality}'")
 
+        # Pick a personality and dialogue type up front so both the live Ollama
+        # path and the fallback path can stay tone-consistent.
+        selected_personality = personality if personality else self._select_appropriate_personality(emotion)
+        selected_dialogue_type = dialogue_type if dialogue_type else self._select_dialogue_type(emotion, selected_personality)
+        personality_template = self.personality_templates.get(selected_personality, self.personality_templates[NPCPersonality.NEUTRAL])
+
         if not self.is_model_available():
-            logging.error("[ERROR] Ollama model not available, cannot generate dialogue.")
-            return "Ollama model is not available for dialogue generation."
+            logging.warning("[WARNING] Ollama model not available; using pre-written fallback dialogue.")
+            dialogue = self._generate_fallback_dialogue(emotion, selected_dialogue_type, personality_template, selected_personality)
+            self.dialogue_history.append({'role': 'assistant', 'content': dialogue, 'response': dialogue})
+            return dialogue
 
         try:
-            # Select appropriate dialogue type and personality if not provided
-            selected_personality = personality if personality else self._select_appropriate_personality(emotion)
-            selected_dialogue_type = dialogue_type if dialogue_type else self._select_dialogue_type(emotion, selected_personality)
-        
-            personality_template = self.personality_templates.get(selected_personality, self.personality_templates[NPCPersonality.NEUTRAL])
             
             prompt = self._create_dialogue_prompt(
                 emotion,
@@ -358,11 +363,11 @@ Emotion:"""
             
             if not dialogue:
                 logging.warning(f"[WARNING] Ollama returned empty response for emotion: {emotion}, dialogue_type: {selected_dialogue_type}. Full response: {response}")
-                dialogue = self._generate_fallback_dialogue(emotion, selected_dialogue_type, personality_template)
-            
+                dialogue = self._generate_fallback_dialogue(emotion, selected_dialogue_type, personality_template, selected_personality)
+
             logging.debug(f"[DEBUG] Ollama raw response: {response}") # Raw response for full debugging
             logging.debug(f"[DEBUG] Generated dialogue: '{dialogue}'")
-            
+
             if dialogue:
                 self.dialogue_history.append({'role': 'assistant', 'content': dialogue, 'response': dialogue})
             return dialogue
@@ -370,7 +375,9 @@ Emotion:"""
             logging.error(f"[ERROR] Unexpected error during dialogue generation: {e}")
             import traceback
             traceback.print_exc()
-            return f"I'm a little confused. Can we try again? (Error: {str(e)[:50]}...)"
+            dialogue = self._generate_fallback_dialogue(emotion, selected_dialogue_type, personality_template, selected_personality)
+            self.dialogue_history.append({'role': 'assistant', 'content': dialogue, 'response': dialogue})
+            return dialogue
 
     def _select_appropriate_personality(self, emotion: str) -> NPCPersonality:
         """Select an appropriate personality based on the emotion."""
@@ -487,40 +494,12 @@ NPC says:"""
         
         return cleaned
 
-    def _generate_fallback_dialogue(self, emotion: str, dialogue_type: DialogueType, 
-                                   personality_template: Dict) -> str:
-        """Generate a fallback dialogue using templates when Ollama fails."""
-        
-        fallback_templates = {
-            DialogueType.GREETING: {
-                "happy": "Hello there! You seem cheerful today!",
-                "sad": "Hi... I'm here if you need to talk.",
-                "angry": "Hello. I can see you're frustrated.",
-                "fear": "Hey there. You're safe here.",
-                "surprise": "Wow! You look amazed!",
-                "disgust": "Hello. Something bothering you?",
-                "neutral": "Hello! How are you doing?"
-            },
-            DialogueType.COMFORT: {
-                "sad": "I'm here for you. It's okay.",
-                "fear": "You're safe here with me.",
-                "angry": "I understand you're upset.",
-                "default": "I care about how you're feeling."
-            },
-            DialogueType.ENCOURAGEMENT: {
-                "happy": "Your positive energy is amazing!",
-                "sad": "You're stronger than you know.",
-                "angry": "Your feelings are valid.",
-                "fear": "You're braver than you think.",
-                "default": "You've got this! I believe in you."
-            }
-        }
-        
-        # Get appropriate template
-        templates = fallback_templates.get(dialogue_type, fallback_templates.get(DialogueType.GREETING, {}))
-        dialogue = templates.get(emotion, templates.get("default", "Hello! How are you feeling?"))
-        
-        return dialogue
+    def _generate_fallback_dialogue(self, emotion: str, dialogue_type: DialogueType,
+                                   personality_template: Dict,
+                                   personality: Optional[NPCPersonality] = None) -> str:
+        """Return a pre-written line for when Ollama can't generate dialogue."""
+        personality_name = personality.value if personality else None
+        return pick_fallback_line(emotion, personality_name)
 
     def get_dialogue_history(self) -> List[Dict]:
         """Get the history of generated dialogues."""
