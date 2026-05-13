@@ -10,6 +10,12 @@ Traditional NPC systems often rely on fixed dialogue trees and static environmen
 
 The goal is to make VR-style interactions more responsive and immersive by allowing NPCs and surrounding environments to react to how the user appears to feel, rather than only responding to scripted input or predefined game events.
 
+### Project Novelty
+
+The novelty of this project is the closed-loop adaptation pipeline rather than emotion classification alone. The system combines facial and speech emotion signals, stabilizes the final emotion through confidence checks and temporal smoothing, and immediately uses that emotion state to adapt NPC dialogue, behavior, lighting, and ambience.
+
+Unlike a static NPC dialogue tree, this project creates an emotion-aware interaction layer where the detected user state drives both conversational responses and VR-style environment parameters. It also exposes explainable runtime details such as model breakdown, active modality status, contribution weights, latency, FPS, and generated dialogue, making the adaptation process observable instead of hidden behind a single prediction.
+
 ### Core Features
 
 - Facial emotion recognition using webcam frames and a CNN model.
